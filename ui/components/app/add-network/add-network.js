@@ -139,9 +139,6 @@ const AddNetwork = () => {
               display={DISPLAY.FLEX}
               alignItems={ALIGN_ITEMS.CENTER}
               flexDirection={FLEX_DIRECTION.ROW}
-              marginTop={7}
-              marginBottom={4}
-              paddingBottom={2}
               className="add-network__header"
             >
               <Typography variant={TYPOGRAPHY.H4} color={COLORS.TEXT_MUTED}>
@@ -153,14 +150,7 @@ const AddNetwork = () => {
               </Typography>
             </Box>
           )}
-          <Box
-            margin={
-              getEnvironmentType() === ENVIRONMENT_TYPE_POPUP
-                ? [0, 0, 1, 0]
-                : [4, 0, 1, 0]
-            }
-            className="add-network__main-container"
-          >
+          <Box className="add-network__main-container">
             <Typography
               variant={TYPOGRAPHY.H6}
               color={COLORS.TEXT_ALTERNATIVE}
@@ -170,7 +160,7 @@ const AddNetwork = () => {
             </Typography>
             <Typography
               variant={TYPOGRAPHY.H7}
-              color={COLORS.TEXT_MUTED}
+              color={COLORS.TEXT_ALTERNATIVE}
               margin={[4, 0, 3, 0]}
             >
               {t('popularCustomNetworks')}
@@ -182,7 +172,6 @@ const AddNetwork = () => {
                 alignItems={ALIGN_ITEMS.CENTER}
                 justifyContent={JUSTIFY_CONTENT.SPACE_BETWEEN}
                 marginBottom={6}
-                className="add-network__list-of-networks"
               >
                 <Box display={DISPLAY.FLEX} alignItems={ALIGN_ITEMS.CENTER}>
                   <Box>
@@ -255,14 +244,7 @@ const AddNetwork = () => {
               </Box>
             ))}
           </Box>
-          <Box
-            padding={
-              getEnvironmentType() === ENVIRONMENT_TYPE_POPUP
-                ? [2, 0, 2, 6]
-                : [2, 0, 2, 0]
-            }
-            className="add-network__footer"
-          >
+          <Box className="add-network__footer">
             <Button
               type="link"
               onClick={(event) => {
