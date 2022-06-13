@@ -1,5 +1,5 @@
 import { GAS_ESTIMATE_TYPES, GAS_LIMITS } from '../../shared/constants/gas';
-import { getInitialStateWithExistingTxState } from '../../test/jest/mocks';
+import { getInitialSendStateWithExistingTxState } from '../../test/jest/mocks';
 import {
   getCustomGasLimit,
   getCustomGasPrice,
@@ -203,7 +203,7 @@ describe('custom-gas selectors', () => {
             EIPS: {},
           },
         },
-        send: getInitialStateWithExistingTxState({
+        send: getInitialSendStateWithExistingTxState({
           gas: {
             gasPrice: '0x28bed0160',
           },
@@ -225,7 +225,7 @@ describe('custom-gas selectors', () => {
             EIPS: {},
           },
         },
-        send: getInitialStateWithExistingTxState({
+        send: getInitialSendStateWithExistingTxState({
           gas: {
             gasPrice: '0x30e4f9b400',
           },
@@ -333,7 +333,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -382,7 +382,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x4',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -431,7 +431,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x4',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -480,7 +480,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -545,7 +545,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -594,7 +594,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -643,7 +643,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x4',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -692,7 +692,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x4',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },
@@ -741,7 +741,7 @@ describe('custom-gas selectors', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasLimit: GAS_LIMITS.SIMPLE,
             },

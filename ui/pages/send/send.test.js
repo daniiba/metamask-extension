@@ -8,7 +8,7 @@ import { ensInitialState } from '../../ducks/ens';
 import { renderWithProvider } from '../../../test/jest';
 import { RINKEBY_CHAIN_ID } from '../../../shared/constants/network';
 import { GAS_ESTIMATE_TYPES } from '../../../shared/constants/gas';
-import { INITIAL_TEST_STATE_FOR_EXISTING_DRAFT } from '../../../test/jest/mocks';
+import { INITIAL_SEND_STATE_FOR_EXISTING_DRAFT } from '../../../test/jest/mocks';
 import Send from './send';
 
 const middleware = [thunk];
@@ -35,7 +35,7 @@ jest.mock(
 );
 
 const baseStore = {
-  send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+  send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
   ENS: ensInitialState,
   gas: {
     customData: { limit: null, price: null },

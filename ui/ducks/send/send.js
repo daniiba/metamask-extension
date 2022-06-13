@@ -22,8 +22,6 @@ import {
 
 import {
   calcGasTotal,
-  generateERC20TransferData,
-  generateERC721TransferData,
   isBalanceSufficient,
   isTokenBalanceSufficient,
 } from '../../pages/send/send.utils';
@@ -102,7 +100,11 @@ import { INVALID_ASSET_TYPE } from '../../helpers/constants/error-keys';
 import { isEqualCaseInsensitive } from '../../../shared/modules/string-utils';
 import { getValueFromWeiHex } from '../../helpers/utils/confirm-tx.util';
 import { parseStandardTokenTransactionData } from '../../../shared/modules/transaction.utils';
-import { estimateGasLimitForSend, getRoundedGasPrice } from './helpers';
+import {
+  estimateGasLimitForSend,
+  generateTransactionParams,
+  getRoundedGasPrice,
+} from './helpers';
 // typedef import statements
 /**
  * @typedef {(
@@ -684,94 +686,6 @@ export const initializeSendState = createAsyncThunk(
   },
 );
 
-/**
- * Generates a txParams from the send slice.
- *
- * @param {SendState} sendState - the state of the send slice
- * @returns {import(
- *  '../../../shared/constants/transaction'
- * ).TxParams} A txParams object that can be used to create a transaction or
- *  update an existing transaction.
- */
-function generateTransactionParams(sendState) {
-  const draftTransaction =
-    sendState.draftTransactions[sendState.currentTransactionUUID];
-  const txParams = {
-    // If the fromAccount has been specified we use that, if not we use the
-    // selected account.
-    from:
-      draftTransaction.fromAccount?.address ||
-      sendState.selectedAccount.address,
-    // gasLimit always needs to be set regardless of the asset being sent
-    // or the type of transaction.
-    gas: draftTransaction.gas.gasLimit,
-  };
-  switch (draftTransaction.asset.type) {
-    case ASSET_TYPES.TOKEN:
-      // When sending a token the to address is the contract address of
-      // the token being sent. The value is set to '0x0' and the data
-      // is generated from the recipient address, token being sent and
-      // amount.
-      txParams.to = draftTransaction.asset.details.address;
-      txParams.value = '0x0';
-      txParams.data = generateERC20TransferData({
-        toAddress: draftTransaction.recipient.address,
-        amount: draftTransaction.amount.value,
-        sendToken: draftTransaction.asset.details,
-      });
-      break;
-    case ASSET_TYPES.COLLECTIBLE:
-      // When sending a token the to address is the contract address of
-      // the token being sent. The value is set to '0x0' and the data
-      // is generated from the recipient address, token being sent and
-      // amount.
-      txParams.to = draftTransaction.asset.details.address;
-      txParams.value = '0x0';
-      txParams.data = generateERC721TransferData({
-        toAddress: draftTransaction.recipient.address,
-        fromAddress:
-          draftTransaction.fromAccount.address ??
-          sendState.selectedAccount.address,
-        tokenId: draftTransaction.asset.details.tokenId,
-      });
-      break;
-    case ASSET_TYPES.NATIVE:
-    default:
-      // When sending native currency the to and value fields use the
-      // recipient and amount values and the data key is either null or
-      // populated with the user input provided in hex field.
-      txParams.to = draftTransaction.recipient.address;
-      txParams.value = draftTransaction.amount.value;
-      txParams.data = draftTransaction.userInputHexData ?? undefined;
-  }
-
-  // We need to make sure that we only include the right gas fee fields
-  // based on the type of transaction the network supports. We will also set
-  // the type param here.
-  if (sendState.eip1559support) {
-    txParams.type = TRANSACTION_ENVELOPE_TYPES.FEE_MARKET;
-
-    txParams.maxFeePerGas = draftTransaction.gas.maxFeePerGas;
-    txParams.maxPriorityFeePerGas = draftTransaction.gas.maxPriorityFeePerGas;
-
-    if (!txParams.maxFeePerGas || txParams.maxFeePerGas === '0x0') {
-      txParams.maxFeePerGas = draftTransaction.gas.gasPrice;
-    }
-
-    if (
-      !txParams.maxPriorityFeePerGas ||
-      txParams.maxPriorityFeePerGas === '0x0'
-    ) {
-      txParams.maxPriorityFeePerGas = txParams.maxFeePerGas;
-    }
-  } else {
-    txParams.gasPrice = draftTransaction.gas.gasPrice;
-    txParams.type = TRANSACTION_ENVELOPE_TYPES.LEGACY;
-  }
-
-  return txParams;
-}
-
 // Action Payload Typedefs
 /**
  * @typedef {(
@@ -856,19 +770,6 @@ const slice = createSlice({
       }
     },
     /**
-     * Clears all drafts from send state and drops the currentTransactionUUID.
-     * This is an important first step before adding a new draft transaction to
-     * avoid possible collision.
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @returns {void}
-     */
-    clearPreviousDrafts: (state) => {
-      state.currentTransactionUUID = null;
-      state.draftTransactions = {};
-    },
-    /**
      * Adds an entry, with timestamp, to the draftTransaction history.
      *
      * @param {SendStateDraft} state - A writable draft of the send state to be
@@ -886,91 +787,6 @@ const slice = createSlice({
           timestamp: Date.now(),
         });
       }
-    },
-    /**
-     * update current amount.value in state and run post update validation of
-     * the amount field and the send state.
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @param {SimpleStringPayload} action - The hex string to be set as the
-     *  amount value.
-     * @returns {void}
-     */
-    updateSendAmount: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      draftTransaction.amount.value = addHexPrefix(action.payload);
-      // Once amount has changed, validate the field
-      slice.caseReducers.validateAmountField(state);
-      if (draftTransaction.asset.type === ASSET_TYPES.NATIVE) {
-        // if sending the native asset the amount being sent will impact the
-        // gas field as well because the gas validation takes into
-        // consideration the available balance minus amount sent before
-        // checking if there is enough left to cover the gas fee.
-        slice.caseReducers.validateGasField(state);
-      }
-      // validate send state
-      slice.caseReducers.validateSendState(state);
-    },
-    /**
-     * computes the maximum amount of asset that can be sent and then calls
-     * the updateSendAmount action above with the computed value, which will
-     * revalidate the field and form.
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @returns {void}
-     */
-    updateAmountToMax: (state) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      let amount = '0x0';
-      if (draftTransaction.asset.type === ASSET_TYPES.TOKEN) {
-        const decimals = draftTransaction.asset.details?.decimals ?? 0;
-        const multiplier = Math.pow(10, Number(decimals));
-
-        amount = multiplyCurrencies(
-          draftTransaction.asset.balance,
-          multiplier,
-          {
-            toNumericBase: 'hex',
-            multiplicandBase: 16,
-            multiplierBase: 10,
-          },
-        );
-      } else {
-        const _gasTotal = sumHexes(
-          draftTransaction.gas.gasTotal || '0x0',
-          state.gasTotalForLayer1 || '0x0',
-        );
-        amount = subtractCurrencies(
-          addHexPrefix(draftTransaction.asset.balance),
-          addHexPrefix(_gasTotal),
-          {
-            toNumericBase: 'hex',
-            aBase: 16,
-            bBase: 16,
-          },
-        );
-      }
-      slice.caseReducers.updateSendAmount(state, {
-        payload: amount,
-      });
-    },
-    /**
-     * updates the userInputHexData state key
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @param {SimpleStringPayload} action - The hex string to be set as the
-     *  userInputHexData value.
-     * @returns {void}
-     */
-    updateUserInputHexData: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      draftTransaction.userInputHexData = action.payload;
     },
     /**
      * gasTotal is computed based on gasPrice and gasLimit and set in state
@@ -1018,142 +834,24 @@ const slice = createSlice({
       slice.caseReducers.validateSendState(state);
     },
     /**
-     * sets the provided gasLimit in state and then recomputes the gasTotal.
+     * Clears all drafts from send state and drops the currentTransactionUUID.
+     * This is an important first step before adding a new draft transaction to
+     * avoid possible collision.
      *
      * @param {SendStateDraft} state - A writable draft of the send state to be
      *  updated.
-     * @param {SimpleStringPayload} action - The
-     *  gasLimit in hex to set in state.
      * @returns {void}
      */
-    updateGasLimit: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      draftTransaction.gas.gasLimit = addHexPrefix(action.payload);
-      slice.caseReducers.calculateGasTotal(state);
+    clearPreviousDrafts: (state) => {
+      state.currentTransactionUUID = null;
+      state.draftTransactions = {};
     },
     /**
-     * Sets the appropriate gas fees in state and determines and sets the
-     * appropriate transactionType based on gas fee fields received.
+     * Clears the send state by setting it to the initial value
      *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @param {GasFeeUpdatePayload} action - The gas fees to update with
-     * @returns {void}
+     * @returns {SendState}
      */
-    updateGasFees: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      if (draftTransaction) {
-        if (
-          action.payload.transactionType ===
-          TRANSACTION_ENVELOPE_TYPES.FEE_MARKET
-        ) {
-          draftTransaction.gas.maxFeePerGas = addHexPrefix(
-            action.payload.maxFeePerGas,
-          );
-          draftTransaction.gas.maxPriorityFeePerGas = addHexPrefix(
-            action.payload.maxPriorityFeePerGas,
-          );
-          draftTransaction.transactionType =
-            TRANSACTION_ENVELOPE_TYPES.FEE_MARKET;
-        } else {
-          // Until we remove the old UI we don't want to automatically update
-          // gasPrice if the user has already manually changed the field value.
-          // When receiving a new estimate the isAutomaticUpdate property will be
-          // on the payload (and set to true). If isAutomaticUpdate is true,
-          // then we check if the previous estimate was '0x0' or if the previous
-          // gasPrice equals the previous gasEstimate. if either of those cases
-          // are true then we update the gasPrice otherwise we skip it because
-          // it indicates the user has ejected from the estimates by modifying
-          // the field.
-          if (
-            action.payload.isAutomaticUpdate !== true ||
-            state.gasPriceEstimate === '0x0' ||
-            draftTransaction.gas.gasPrice === state.gasPriceEstimate
-          ) {
-            draftTransaction.gas.gasPrice = addHexPrefix(
-              action.payload.gasPrice,
-            );
-          }
-          draftTransaction.transactionType = TRANSACTION_ENVELOPE_TYPES.LEGACY;
-        }
-        slice.caseReducers.calculateGasTotal(state);
-      }
-    },
-
-    /**
-     * Sets the appropriate gas fees in state after receiving new estimates.
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @param {GasEstimateUpdatePayload)} action - The gas fee update payload
-     * @returns {void}
-     */
-    updateGasFeeEstimates: (state, action) => {
-      const { gasFeeEstimates, gasEstimateType } = action.payload;
-      let gasPriceEstimate = '0x0';
-      switch (gasEstimateType) {
-        case GAS_ESTIMATE_TYPES.FEE_MARKET:
-          slice.caseReducers.updateGasFees(state, {
-            payload: {
-              transactionType: TRANSACTION_ENVELOPE_TYPES.FEE_MARKET,
-              maxFeePerGas: getGasPriceInHexWei(
-                gasFeeEstimates.medium.suggestedMaxFeePerGas,
-              ),
-              maxPriorityFeePerGas: getGasPriceInHexWei(
-                gasFeeEstimates.medium.suggestedMaxPriorityFeePerGas,
-              ),
-            },
-          });
-          break;
-        case GAS_ESTIMATE_TYPES.LEGACY:
-          gasPriceEstimate = getRoundedGasPrice(gasFeeEstimates.medium);
-          slice.caseReducers.updateGasFees(state, {
-            payload: {
-              gasPrice: gasPriceEstimate,
-              type: TRANSACTION_ENVELOPE_TYPES.LEGACY,
-              isAutomaticUpdate: true,
-            },
-          });
-          break;
-        case GAS_ESTIMATE_TYPES.ETH_GASPRICE:
-          gasPriceEstimate = getRoundedGasPrice(gasFeeEstimates.gasPrice);
-          slice.caseReducers.updateGasFees(state, {
-            payload: {
-              gasPrice: getRoundedGasPrice(gasFeeEstimates.gasPrice),
-              type: TRANSACTION_ENVELOPE_TYPES.LEGACY,
-              isAutomaticUpdate: true,
-            },
-          });
-          break;
-        case GAS_ESTIMATE_TYPES.NONE:
-        default:
-          break;
-      }
-      // Record the latest gasPriceEstimate for future comparisons
-      state.gasPriceEstimate = addHexPrefix(gasPriceEstimate);
-    },
-    /**
-     * sets the layer 1 fees total (for a multi-layer fee network)
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @param {SimpleStringPayload} action - the
-     *  gasTotalForLayer1 to set in hex wei.
-     * @returns {void}
-     */
-    updateLayer1Fees: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-      state.gasTotalForLayer1 = action.payload;
-      if (
-        state.amountMode === AMOUNT_MODES.MAX &&
-        draftTransaction.asset.type === ASSET_TYPES.NATIVE
-      ) {
-        slice.caseReducers.updateAmountToMax(state);
-      }
-    },
+    resetSendState: () => initialState,
     /**
      * sets the amount mode to the provided value as long as it is one of the
      * supported modes (MAX|INPUT)
@@ -1168,6 +866,51 @@ const slice = createSlice({
       if (Object.values(AMOUNT_MODES).includes(action.payload)) {
         state.amountMode = action.payload;
       }
+    },
+    /**
+     * computes the maximum amount of asset that can be sent and then calls
+     * the updateSendAmount action above with the computed value, which will
+     * revalidate the field and form.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @returns {void}
+     */
+    updateAmountToMax: (state) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      let amount = '0x0';
+      if (draftTransaction.asset.type === ASSET_TYPES.TOKEN) {
+        const decimals = draftTransaction.asset.details?.decimals ?? 0;
+        const multiplier = Math.pow(10, Number(decimals));
+
+        amount = multiplyCurrencies(
+          draftTransaction.asset.balance,
+          multiplier,
+          {
+            toNumericBase: 'hex',
+            multiplicandBase: 16,
+            multiplierBase: 10,
+          },
+        );
+      } else {
+        const _gasTotal = sumHexes(
+          draftTransaction.gas.gasTotal || '0x0',
+          state.gasTotalForLayer1 || '0x0',
+        );
+        amount = subtractCurrencies(
+          addHexPrefix(draftTransaction.asset.balance),
+          addHexPrefix(_gasTotal),
+          {
+            toNumericBase: 'hex',
+            aBase: 16,
+            bBase: 16,
+          },
+        );
+      }
+      slice.caseReducers.updateSendAmount(state, {
+        payload: amount,
+      });
     },
     /**
      * Updates the currently selected asset
@@ -1227,6 +970,142 @@ const slice = createSlice({
       slice.caseReducers.validateSendState(state);
     },
     /**
+     * Sets the appropriate gas fees in state after receiving new estimates.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @param {GasEstimateUpdatePayload)} action - The gas fee update payload
+     * @returns {void}
+     */
+    updateGasFeeEstimates: (state, action) => {
+      const { gasFeeEstimates, gasEstimateType } = action.payload;
+      let gasPriceEstimate = '0x0';
+      switch (gasEstimateType) {
+        case GAS_ESTIMATE_TYPES.FEE_MARKET:
+          slice.caseReducers.updateGasFees(state, {
+            payload: {
+              transactionType: TRANSACTION_ENVELOPE_TYPES.FEE_MARKET,
+              maxFeePerGas: getGasPriceInHexWei(
+                gasFeeEstimates.medium.suggestedMaxFeePerGas,
+              ),
+              maxPriorityFeePerGas: getGasPriceInHexWei(
+                gasFeeEstimates.medium.suggestedMaxPriorityFeePerGas,
+              ),
+            },
+          });
+          break;
+        case GAS_ESTIMATE_TYPES.LEGACY:
+          gasPriceEstimate = getRoundedGasPrice(gasFeeEstimates.medium);
+          slice.caseReducers.updateGasFees(state, {
+            payload: {
+              gasPrice: gasPriceEstimate,
+              type: TRANSACTION_ENVELOPE_TYPES.LEGACY,
+              isAutomaticUpdate: true,
+            },
+          });
+          break;
+        case GAS_ESTIMATE_TYPES.ETH_GASPRICE:
+          gasPriceEstimate = getRoundedGasPrice(gasFeeEstimates.gasPrice);
+          slice.caseReducers.updateGasFees(state, {
+            payload: {
+              gasPrice: getRoundedGasPrice(gasFeeEstimates.gasPrice),
+              type: TRANSACTION_ENVELOPE_TYPES.LEGACY,
+              isAutomaticUpdate: true,
+            },
+          });
+          break;
+        case GAS_ESTIMATE_TYPES.NONE:
+        default:
+          break;
+      }
+      // Record the latest gasPriceEstimate for future comparisons
+      state.gasPriceEstimate = addHexPrefix(gasPriceEstimate);
+    },
+    /**
+     * Sets the appropriate gas fees in state and determines and sets the
+     * appropriate transactionType based on gas fee fields received.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @param {GasFeeUpdatePayload} action - The gas fees to update with
+     * @returns {void}
+     */
+    updateGasFees: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      if (draftTransaction) {
+        if (
+          action.payload.transactionType ===
+          TRANSACTION_ENVELOPE_TYPES.FEE_MARKET
+        ) {
+          draftTransaction.gas.maxFeePerGas = addHexPrefix(
+            action.payload.maxFeePerGas,
+          );
+          draftTransaction.gas.maxPriorityFeePerGas = addHexPrefix(
+            action.payload.maxPriorityFeePerGas,
+          );
+          draftTransaction.transactionType =
+            TRANSACTION_ENVELOPE_TYPES.FEE_MARKET;
+        } else {
+          // Until we remove the old UI we don't want to automatically update
+          // gasPrice if the user has already manually changed the field value.
+          // When receiving a new estimate the isAutomaticUpdate property will be
+          // on the payload (and set to true). If isAutomaticUpdate is true,
+          // then we check if the previous estimate was '0x0' or if the previous
+          // gasPrice equals the previous gasEstimate. if either of those cases
+          // are true then we update the gasPrice otherwise we skip it because
+          // it indicates the user has ejected from the estimates by modifying
+          // the field.
+          if (
+            action.payload.isAutomaticUpdate !== true ||
+            state.gasPriceEstimate === '0x0' ||
+            draftTransaction.gas.gasPrice === state.gasPriceEstimate
+          ) {
+            draftTransaction.gas.gasPrice = addHexPrefix(
+              action.payload.gasPrice,
+            );
+          }
+          draftTransaction.transactionType = TRANSACTION_ENVELOPE_TYPES.LEGACY;
+        }
+        slice.caseReducers.calculateGasTotal(state);
+      }
+    },
+    /**
+     * sets the provided gasLimit in state and then recomputes the gasTotal.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @param {SimpleStringPayload} action - The
+     *  gasLimit in hex to set in state.
+     * @returns {void}
+     */
+    updateGasLimit: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      draftTransaction.gas.gasLimit = addHexPrefix(action.payload);
+      slice.caseReducers.calculateGasTotal(state);
+    },
+    /**
+     * sets the layer 1 fees total (for a multi-layer fee network)
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @param {SimpleStringPayload} action - the
+     *  gasTotalForLayer1 to set in hex wei.
+     * @returns {void}
+     */
+    updateLayer1Fees: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      state.gasTotalForLayer1 = action.payload;
+      if (
+        state.amountMode === AMOUNT_MODES.MAX &&
+        draftTransaction.asset.type === ASSET_TYPES.NATIVE
+      ) {
+        slice.caseReducers.updateAmountToMax(state);
+      }
+    },
+    /**
      * Updates the recipient of the draftTransaction
      *
      * @param {SendStateDraft} state - A writable draft of the send state to be
@@ -1260,26 +1139,18 @@ const slice = createSlice({
       slice.caseReducers.validateSendState(state);
     },
     /**
-     * Updates the gasIsSetInModal property to false which results in showing
-     * the default gas price/limit fields in the send page.
+     * Clears the user input and changes the recipient search mode to the
+     * specified value
      *
      * @param {SendStateDraft} state - A writable draft of the send state to be
      *  updated.
+     * @param {UpdateRecipientModePayload} action - The mode to set the
+     *  recipient search to
      * @returns {void}
      */
-    useDefaultGas: (state) => {
-      state.gasIsSetInModal = false;
-    },
-    /**
-     * Updates the gasIsSetInModal property to true which results in showing
-     * the gas fees from the custom gas modal in the send page.
-     *
-     * @param {SendStateDraft} state - A writable draft of the send state to be
-     *  updated.
-     * @returns {void}
-     */
-    useCustomGas: (state) => {
-      state.gasIsSetInModal = true;
+    updateRecipientSearchMode: (state, action) => {
+      state.recipientInput = '';
+      state.recipientMode = action.payload;
     },
     /**
      * Updates the value of the recipientInput key with what the user has
@@ -1296,79 +1167,68 @@ const slice = createSlice({
       // input field
       state.recipientInput = action.payload;
     },
-    validateRecipientUserInput: (state, action) => {
-      const draftTransaction =
-        state.draftTransactions[state.currentTransactionUUID];
-
-      if (draftTransaction) {
-        if (
-          state.recipientMode === RECIPIENT_SEARCH_MODES.MY_ACCOUNTS ||
-          state.recipientInput === '' ||
-          state.recipientInput === null
-        ) {
-          draftTransaction.recipient.error = null;
-          draftTransaction.recipient.warning = null;
-        } else {
-          const isSendingToken =
-            draftTransaction.asset.type === ASSET_TYPES.TOKEN ||
-            draftTransaction.asset.type === ASSET_TYPES.COLLECTIBLE;
-          const { chainId, tokens, tokenAddressList } = action.payload;
-          if (
-            isBurnAddress(state.recipientInput) ||
-            (!isValidHexAddress(state.recipientInput, {
-              mixedCaseUseChecksum: true,
-            }) &&
-              !isValidDomainName(state.recipientInput))
-          ) {
-            draftTransaction.recipient.error = isDefaultMetaMaskChain(chainId)
-              ? INVALID_RECIPIENT_ADDRESS_ERROR
-              : INVALID_RECIPIENT_ADDRESS_NOT_ETH_NETWORK_ERROR;
-          } else if (
-            isSendingToken &&
-            isOriginContractAddress(
-              state.recipientInput,
-              draftTransaction.asset.details.address,
-            )
-          ) {
-            draftTransaction.recipient.error = CONTRACT_ADDRESS_ERROR;
-          } else {
-            draftTransaction.recipient.error = null;
-          }
-          if (
-            isSendingToken &&
-            isValidHexAddress(state.recipientInput) &&
-            (tokenAddressList.find((address) =>
-              isEqualCaseInsensitive(address, state.recipientInput),
-            ) ||
-              checkExistingAddresses(state.recipientInput, tokens))
-          ) {
-            draftTransaction.recipient.warning = KNOWN_RECIPIENT_ADDRESS_WARNING;
-          } else {
-            draftTransaction.recipient.warning = null;
-          }
-        }
-      }
-    },
     /**
-     * Clears the user input and changes the recipient search mode to the
-     * specified value
+     * update current amount.value in state and run post update validation of
+     * the amount field and the send state.
      *
      * @param {SendStateDraft} state - A writable draft of the send state to be
      *  updated.
-     * @param {UpdateRecipientModePayload} action - The mode to set the
-     *  recipient search to
+     * @param {SimpleStringPayload} action - The hex string to be set as the
+     *  amount value.
      * @returns {void}
      */
-    updateRecipientSearchMode: (state, action) => {
-      state.recipientInput = '';
-      state.recipientMode = action.payload;
+    updateSendAmount: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      draftTransaction.amount.value = addHexPrefix(action.payload);
+      // Once amount has changed, validate the field
+      slice.caseReducers.validateAmountField(state);
+      if (draftTransaction.asset.type === ASSET_TYPES.NATIVE) {
+        // if sending the native asset the amount being sent will impact the
+        // gas field as well because the gas validation takes into
+        // consideration the available balance minus amount sent before
+        // checking if there is enough left to cover the gas fee.
+        slice.caseReducers.validateGasField(state);
+      }
+      // validate send state
+      slice.caseReducers.validateSendState(state);
     },
     /**
-     * Clears the send state by setting it to the initial value
+     * updates the userInputHexData state key
      *
-     * @returns {SendState}
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @param {SimpleStringPayload} action - The hex string to be set as the
+     *  userInputHexData value.
+     * @returns {void}
      */
-    resetSendState: () => initialState,
+    updateUserInputHexData: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+      draftTransaction.userInputHexData = action.payload;
+    },
+    /**
+     * Updates the gasIsSetInModal property to true which results in showing
+     * the gas fees from the custom gas modal in the send page.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @returns {void}
+     */
+    useCustomGas: (state) => {
+      state.gasIsSetInModal = true;
+    },
+    /**
+     * Updates the gasIsSetInModal property to false which results in showing
+     * the default gas price/limit fields in the send page.
+     *
+     * @param {SendStateDraft} state - A writable draft of the send state to be
+     *  updated.
+     * @returns {void}
+     */
+    useDefaultGas: (state) => {
+      state.gasIsSetInModal = false;
+    },
     /**
      * Checks for the validity of the draftTransactions selected amount to send
      *
@@ -1441,6 +1301,59 @@ const slice = createSlice({
         ? INSUFFICIENT_FUNDS_ERROR
         : null;
     },
+    validateRecipientUserInput: (state, action) => {
+      const draftTransaction =
+        state.draftTransactions[state.currentTransactionUUID];
+
+      if (draftTransaction) {
+        if (
+          state.recipientMode === RECIPIENT_SEARCH_MODES.MY_ACCOUNTS ||
+          state.recipientInput === '' ||
+          state.recipientInput === null
+        ) {
+          draftTransaction.recipient.error = null;
+          draftTransaction.recipient.warning = null;
+        } else {
+          const isSendingToken =
+            draftTransaction.asset.type === ASSET_TYPES.TOKEN ||
+            draftTransaction.asset.type === ASSET_TYPES.COLLECTIBLE;
+          const { chainId, tokens, tokenAddressList } = action.payload;
+          if (
+            isBurnAddress(state.recipientInput) ||
+            (!isValidHexAddress(state.recipientInput, {
+              mixedCaseUseChecksum: true,
+            }) &&
+              !isValidDomainName(state.recipientInput))
+          ) {
+            draftTransaction.recipient.error = isDefaultMetaMaskChain(chainId)
+              ? INVALID_RECIPIENT_ADDRESS_ERROR
+              : INVALID_RECIPIENT_ADDRESS_NOT_ETH_NETWORK_ERROR;
+          } else if (
+            isSendingToken &&
+            isOriginContractAddress(
+              state.recipientInput,
+              draftTransaction.asset.details.address,
+            )
+          ) {
+            draftTransaction.recipient.error = CONTRACT_ADDRESS_ERROR;
+          } else {
+            draftTransaction.recipient.error = null;
+          }
+          if (
+            isSendingToken &&
+            isValidHexAddress(state.recipientInput) &&
+            (tokenAddressList.find((address) =>
+              isEqualCaseInsensitive(address, state.recipientInput),
+            ) ||
+              checkExistingAddresses(state.recipientInput, tokens))
+          ) {
+            draftTransaction.recipient.warning = KNOWN_RECIPIENT_ADDRESS_WARNING;
+          } else {
+            draftTransaction.recipient.warning = null;
+          }
+        }
+      }
+    },
     /**
      * Checks if the draftTransaction is currently valid. The following list of
      * cases from the switch statement in this function describe when the
@@ -1484,56 +1397,6 @@ const slice = createSlice({
   },
   extraReducers: (builder) => {
     builder
-      .addCase(QR_CODE_DETECTED, (state, action) => {
-        // When data is received from the QR Code Scanner we set the recipient
-        // as long as a valid address can be pulled from the data. If an
-        // address is pulled but it is invalid, we display an error.
-        const qrCodeData = action.value;
-        const draftTransaction =
-          state.draftTransactions[state.currentTransactionUUID];
-        if (qrCodeData && draftTransaction) {
-          if (qrCodeData.type === 'address') {
-            const scannedAddress = qrCodeData.values.address.toLowerCase();
-            if (
-              isValidHexAddress(scannedAddress, { allowNonPrefixed: false })
-            ) {
-              if (draftTransaction.recipient.address !== scannedAddress) {
-                slice.caseReducers.updateRecipient(state, {
-                  payload: { address: scannedAddress },
-                });
-              }
-            } else {
-              draftTransaction.recipient.error = INVALID_RECIPIENT_ADDRESS_ERROR;
-            }
-          }
-        }
-      })
-      .addCase(SELECTED_ACCOUNT_CHANGED, (state, action) => {
-        // If we are on the edit flow the account we are keyed into will be the
-        // original 'from' account, which may differ from the selected account
-        if (state.stage !== SEND_STAGES.EDIT) {
-          // This event occurs when the user selects a new account from the
-          // account menu, or the currently active account's balance updates.
-          state.selectedAccount.balance = action.payload.account.balance;
-          state.selectedAccount.address = action.payload.account.address;
-          const draftTransaction =
-            state.draftTransactions[state.currentTransactionUUID];
-          // This action will occur even when we aren't on the send flow, which
-          // is okay as it keeps the selectedAccount details up to date. We do
-          // not need to validate anything if there isn't a current draft
-          // transaction. If there is, we need to update the asset balance if
-          // the asset is set to the native network asset, and then validate
-          // the transaction.
-          if (draftTransaction) {
-            if (draftTransaction?.asset.type === ASSET_TYPES.NATIVE) {
-              draftTransaction.asset.balance = action.payload.account.balance;
-            }
-            slice.caseReducers.validateAmountField(state);
-            slice.caseReducers.validateGasField(state);
-            slice.caseReducers.validateSendState(state);
-          }
-        }
-      })
       .addCase(ACCOUNT_CHANGED, (state, action) => {
         // If we are on the edit flow then we need to watch for changes to the
         // current account.address in state and keep balance updated
@@ -1573,6 +1436,41 @@ const slice = createSlice({
           draftTransaction.recipient.nickname =
             addressBook[draftTransaction.recipient.address].name;
         }
+      })
+      .addCase(computeEstimatedGasLimit.pending, (state) => {
+        // When we begin to fetch gasLimit we should indicate we are loading
+        // a gas estimate.
+        state.gasEstimateIsLoading = true;
+      })
+      .addCase(computeEstimatedGasLimit.fulfilled, (state, action) => {
+        // When we receive a new gasLimit from the computeEstimatedGasLimit
+        // thunk we need to update our gasLimit in the slice. We call into the
+        // caseReducer updateGasLimit to tap into the appropriate follow up
+        // checks and gasTotal calculation. First set gasEstimateIsLoading to
+        // false.
+        state.gasEstimateIsLoading = false;
+        if (action.payload?.gasLimit) {
+          slice.caseReducers.updateGasLimit(state, {
+            payload: action.payload.gasLimit,
+          });
+        }
+        if (action.payload?.gasTotalForLayer1) {
+          slice.caseReducers.updateLayer1Fees(state, {
+            payload: action.payload.gasTotalForLayer1,
+          });
+        }
+      })
+      .addCase(computeEstimatedGasLimit.rejected, (state) => {
+        // If gas estimation fails, we should set the loading state to false,
+        // because it is no longer loading
+        state.gasEstimateIsLoading = false;
+      })
+      .addCase(GAS_FEE_ESTIMATES_UPDATED, (state, action) => {
+        // When the gasFeeController updates its gas fee estimates we need to
+        // update and validate state based on those new values
+        slice.caseReducers.updateGasFeeEstimates(state, {
+          payload: action.payload,
+        });
       })
       .addCase(initializeSendState.pending, (state) => {
         // when we begin initializing state, which can happen when switching
@@ -1614,40 +1512,55 @@ const slice = createSlice({
         slice.caseReducers.validateGasField(state);
         slice.caseReducers.validateSendState(state);
       })
-      .addCase(computeEstimatedGasLimit.pending, (state) => {
-        // When we begin to fetch gasLimit we should indicate we are loading
-        // a gas estimate.
-        state.gasEstimateIsLoading = true;
-      })
-      .addCase(computeEstimatedGasLimit.fulfilled, (state, action) => {
-        // When we receive a new gasLimit from the computeEstimatedGasLimit
-        // thunk we need to update our gasLimit in the slice. We call into the
-        // caseReducer updateGasLimit to tap into the appropriate follow up
-        // checks and gasTotal calculation. First set gasEstimateIsLoading to
-        // false.
-        state.gasEstimateIsLoading = false;
-        if (action.payload?.gasLimit) {
-          slice.caseReducers.updateGasLimit(state, {
-            payload: action.payload.gasLimit,
-          });
+      .addCase(SELECTED_ACCOUNT_CHANGED, (state, action) => {
+        // If we are on the edit flow the account we are keyed into will be the
+        // original 'from' account, which may differ from the selected account
+        if (state.stage !== SEND_STAGES.EDIT) {
+          // This event occurs when the user selects a new account from the
+          // account menu, or the currently active account's balance updates.
+          state.selectedAccount.balance = action.payload.account.balance;
+          state.selectedAccount.address = action.payload.account.address;
+          const draftTransaction =
+            state.draftTransactions[state.currentTransactionUUID];
+          // This action will occur even when we aren't on the send flow, which
+          // is okay as it keeps the selectedAccount details up to date. We do
+          // not need to validate anything if there isn't a current draft
+          // transaction. If there is, we need to update the asset balance if
+          // the asset is set to the native network asset, and then validate
+          // the transaction.
+          if (draftTransaction) {
+            if (draftTransaction?.asset.type === ASSET_TYPES.NATIVE) {
+              draftTransaction.asset.balance = action.payload.account.balance;
+            }
+            slice.caseReducers.validateAmountField(state);
+            slice.caseReducers.validateGasField(state);
+            slice.caseReducers.validateSendState(state);
+          }
         }
-        if (action.payload?.gasTotalForLayer1) {
-          slice.caseReducers.updateLayer1Fees(state, {
-            payload: action.payload.gasTotalForLayer1,
-          });
+      })
+      .addCase(QR_CODE_DETECTED, (state, action) => {
+        // When data is received from the QR Code Scanner we set the recipient
+        // as long as a valid address can be pulled from the data. If an
+        // address is pulled but it is invalid, we display an error.
+        const qrCodeData = action.value;
+        const draftTransaction =
+          state.draftTransactions[state.currentTransactionUUID];
+        if (qrCodeData && draftTransaction) {
+          if (qrCodeData.type === 'address') {
+            const scannedAddress = qrCodeData.values.address.toLowerCase();
+            if (
+              isValidHexAddress(scannedAddress, { allowNonPrefixed: false })
+            ) {
+              if (draftTransaction.recipient.address !== scannedAddress) {
+                slice.caseReducers.updateRecipient(state, {
+                  payload: { address: scannedAddress },
+                });
+              }
+            } else {
+              draftTransaction.recipient.error = INVALID_RECIPIENT_ADDRESS_ERROR;
+            }
+          }
         }
-      })
-      .addCase(computeEstimatedGasLimit.rejected, (state) => {
-        // If gas estimation fails, we should set the loading state to false,
-        // because it is no longer loading
-        state.gasEstimateIsLoading = false;
-      })
-      .addCase(GAS_FEE_ESTIMATES_UPDATED, (state, action) => {
-        // When the gasFeeController updates its gas fee estimates we need to
-        // update and validate state based on those new values
-        slice.caseReducers.updateGasFeeEstimates(state, {
-          payload: action.payload,
-        });
       });
   },
 });
@@ -1668,6 +1581,140 @@ const {
 export { useDefaultGas, useCustomGas, updateGasLimit, addHistoryEntry };
 
 // Action Creators
+
+/**
+ * This method is for usage when validating user input so that validation
+ * is only run after a delay in typing of 300ms. Usage at callsites requires
+ * passing in both the dispatch method and the payload to dispatch, which makes
+ * it only applicable for use within action creators.
+ */
+const debouncedValidateRecipientUserInput = debounce((dispatch, payload) => {
+  dispatch(
+    addHistoryEntry(
+      `sendFlow - user typed ${payload.userInput} into recipient input field`,
+    ),
+  );
+  dispatch(validateRecipientUserInput(payload));
+}, 300);
+
+/**
+ * Begins a new draft transaction, derived from the txParams of an existing
+ * transaction in the TransactionController. This action will first clear out
+ * the previous draft transactions and currentTransactionUUID from state. This
+ * action is one of the two entry points into the send flow. NOTE: You must
+ * route to the send page *after* dispatching this action resolves to ensure
+ * that the draftTransaction is properly created.
+ *
+ * @param {AssetTypesString} assetType - The type of asset the transaction
+ *  being edited was sending. The details of the asset will be retrieved from
+ *  the transaction data in state.
+ * @param {string} transactionId - The id of the transaction being edited.
+ * @returns {ThunkAction<void>}
+ */
+export function editExistingTransaction(assetType, transactionId) {
+  return async (dispatch, getState) => {
+    await dispatch(actions.clearPreviousDrafts());
+    const state = getState();
+    const unapprovedTransactions = getUnapprovedTxs(state);
+    const transaction = unapprovedTransactions[transactionId];
+    const account = getTargetAccount(state, transaction.txParams.from);
+
+    if (assetType === ASSET_TYPES.NATIVE) {
+      await dispatch(
+        actions.addNewDraft({
+          ...draftTransactionInitialState,
+          id: transactionId,
+          fromAccount: account,
+          gas: {
+            ...draftTransactionInitialState.gas,
+            gasLimit: transaction.txParams.gas,
+            gasPrice: transaction.txParams.gasPrice,
+          },
+          userInputHexData: transaction.txParams.data,
+          recipient: {
+            ...draftTransactionInitialState.recipient,
+            address: transaction.txParams.to,
+            nickname:
+              getAddressBookEntryOrAccountName(state, transaction.txParams.to)
+                ?.name ?? '',
+          },
+          amount: {
+            ...draftTransactionInitialState.amount,
+            value: transaction.txParams.value,
+          },
+          history: [
+            `sendFlow - user clicked edit on transaction with id ${transactionId}`,
+          ],
+        }),
+      );
+      await dispatch(
+        updateSendAsset(
+          { type: ASSET_TYPES.NATIVE },
+          { skipComputeEstimatedGasLimit: true },
+        ),
+      );
+    } else {
+      const tokenData = parseStandardTokenTransactionData(
+        transaction.txParams.data,
+      );
+      const tokenAmountInDec =
+        assetType === ASSET_TYPES.TOKEN ? getTokenValueParam(tokenData) : '1';
+      const address = getTokenAddressParam(tokenData);
+      const nickname =
+        getAddressBookEntryOrAccountName(state, address)?.name ?? '';
+
+      const tokenAmountInHex = addHexPrefix(
+        conversionUtil(tokenAmountInDec, {
+          fromNumericBase: 'dec',
+          toNumericBase: 'hex',
+        }),
+      );
+
+      await dispatch(
+        actions.addNewDraft({
+          ...draftTransactionInitialState,
+          id: transactionId,
+          fromAccount: account,
+          gas: {
+            ...draftTransactionInitialState.gas,
+            gasLimit: transaction.txParams.gas,
+            gasPrice: transaction.txParams.gasPrice,
+          },
+          userInputHexData: transaction.txParams.data,
+          recipient: {
+            ...draftTransactionInitialState.recipient,
+            address,
+            nickname,
+          },
+          amount: {
+            ...draftTransactionInitialState.amount,
+            value: tokenAmountInHex,
+          },
+          history: [
+            `sendFlow - user clicked edit on transaction with id ${transactionId}`,
+          ],
+        }),
+      );
+
+      await dispatch(
+        updateSendAsset(
+          {
+            type: assetType,
+            details: {
+              address: transaction.txParams.to,
+              ...(assetType === ASSET_TYPES.COLLECTIBLE
+                ? { tokenId: getTokenValueParam(tokenData) }
+                : {}),
+            },
+          },
+          { skipComputeEstimatedGasLimit: true },
+        ),
+      );
+    }
+
+    await dispatch(initializeSendState());
+  };
+}
 
 /**
  * This method is a temporary placeholder to support the old UI in both the
@@ -1696,22 +1743,65 @@ export function updateGasPrice(gasPrice) {
 }
 
 /**
- * Resets the entire send state tree to the initial state. It also disconnects
- * polling from the gas controller if the token is present in state.
+ * Updates the recipient in state based on the input provided, and then will
+ * recompute gas limit when sending a TOKEN asset type. Changing the recipient
+ * address results in hex data changing because the recipient address is
+ * encoded in the data instead of being in the 'to' field. The to field in a
+ * token send will always be the token contract address.
+ * If no nickname is provided, the address book state will be checked to see if
+ * a nickname for the passed address has already been saved. This ensures the
+ * (temporary) send state recipient nickname is consistent with the address book
+ * nickname which has already been persisted to state.
  *
+ * @param {Object} recipient - Recipient information
+ * @param {string} recipient.address - hex address to send the transaction to
+ * @param {string} [recipient.nickname] - Alias for the address to display
+ *  to the user
  * @returns {ThunkAction<void>}
  */
-export function resetSendState() {
+export function updateRecipient({ address, nickname }) {
   return async (dispatch, getState) => {
+    // Do not addHistoryEntry here as this is called from a number of places
+    // each with significance to the user and transaction history.
     const state = getState();
-    dispatch(actions.resetSendState());
-
-    if (state[name].gasEstimatePollToken) {
-      await disconnectGasFeeEstimatePoller(state[name].gasEstimatePollToken);
-      removePollingTokenFromAppState(state[name].gasEstimatePollToken);
-    }
+    const nicknameFromAddressBookEntryOrAccountName =
+      getAddressBookEntryOrAccountName(state, address) ?? '';
+    await dispatch(
+      actions.updateRecipient({
+        address,
+        nickname: nickname || nicknameFromAddressBookEntryOrAccountName,
+      }),
+    );
+    await dispatch(computeEstimatedGasLimit());
   };
 }
+
+/**
+ * This method is called to update the user's input into the ENS input field.
+ * Once the field is updated, the field will be validated using a debounced
+ * version of the validateRecipientUserInput action. This way validation only
+ * occurs once the user has stopped typing.
+ *
+ * @param {string} userInput - the value that the user is typing into the field
+ */
+export function updateRecipientUserInput(userInput) {
+  return async (dispatch, getState) => {
+    await dispatch(actions.updateRecipientUserInput(userInput));
+    const state = getState();
+    const chainId = getCurrentChainId(state);
+    const tokens = getTokens(state);
+    const useTokenDetection = getUseTokenDetection(state);
+    const tokenAddressList = Object.keys(getTokenList(state));
+    debouncedValidateRecipientUserInput(dispatch, {
+      userInput,
+      chainId,
+      tokens,
+      useTokenDetection,
+      tokenAddressList,
+    });
+  };
+}
+
 /**
  * Updates the amount the user intends to send and performs side effects.
  * 1. If the current mode is MAX change to INPUT
@@ -1887,43 +1977,28 @@ export function updateSendAsset(
 }
 
 /**
- * This method is for usage when validating user input so that validation
- * is only run after a delay in typing of 300ms. Usage at callsites requires
- * passing in both the dispatch method and the payload to dispatch, which makes
- * it only applicable for use within action creators.
- */
-const debouncedValidateRecipientUserInput = debounce((dispatch, payload) => {
-  dispatch(
-    addHistoryEntry(
-      `sendFlow - user typed ${payload.userInput} into recipient input field`,
-    ),
-  );
-  dispatch(validateRecipientUserInput(payload));
-}, 300);
-
-/**
- * This method is called to update the user's input into the ENS input field.
- * Once the field is updated, the field will be validated using a debounced
- * version of the validateRecipientUserInput action. This way validation only
- * occurs once the user has stopped typing.
+ * When a user has enabled hex data field in advanced settings they will be
+ * able to supply hex data on a transaction. This method updates the user
+ * supplied data. Note, when sending native assets this will result in
+ * recomputing estimated gasLimit. When sending a ERC20 asset this is not done
+ * because the data sent in the transaction will be determined by the asset,
+ * recipient and value, NOT what the user has supplied.
  *
- * @param {string} userInput - the value that the user is typing into the field
+ * @param {string} hexData - hex encoded string representing transaction data.
+ * @returns {ThunkAction<void>}
  */
-export function updateRecipientUserInput(userInput) {
+export function updateSendHexData(hexData) {
   return async (dispatch, getState) => {
-    await dispatch(actions.updateRecipientUserInput(userInput));
+    await dispatch(
+      addHistoryEntry(`sendFlow - user added custom hexData ${hexData}`),
+    );
+    await dispatch(actions.updateUserInputHexData(hexData));
     const state = getState();
-    const chainId = getCurrentChainId(state);
-    const tokens = getTokens(state);
-    const useTokenDetection = getUseTokenDetection(state);
-    const tokenAddressList = Object.keys(getTokenList(state));
-    debouncedValidateRecipientUserInput(dispatch, {
-      userInput,
-      chainId,
-      tokens,
-      useTokenDetection,
-      tokenAddressList,
-    });
+    const draftTransaction =
+      state[name].draftTransactions[state[name].currentTransactionUUID];
+    if (draftTransaction.asset.type === ASSET_TYPES.NATIVE) {
+      await dispatch(computeEstimatedGasLimit());
+    }
   };
 }
 
@@ -1961,40 +2036,6 @@ export function useMyAccountsForRecipientSearch() {
 }
 
 /**
- * Updates the recipient in state based on the input provided, and then will
- * recompute gas limit when sending a TOKEN asset type. Changing the recipient
- * address results in hex data changing because the recipient address is
- * encoded in the data instead of being in the 'to' field. The to field in a
- * token send will always be the token contract address.
- * If no nickname is provided, the address book state will be checked to see if
- * a nickname for the passed address has already been saved. This ensures the
- * (temporary) send state recipient nickname is consistent with the address book
- * nickname which has already been persisted to state.
- *
- * @param {Object} recipient - Recipient information
- * @param {string} recipient.address - hex address to send the transaction to
- * @param {string} [recipient.nickname] - Alias for the address to display
- *  to the user
- * @returns {ThunkAction<void>}
- */
-export function updateRecipient({ address, nickname }) {
-  return async (dispatch, getState) => {
-    // Do not addHistoryEntry here as this is called from a number of places
-    // each with significance to the user and transaction history.
-    const state = getState();
-    const nicknameFromAddressBookEntryOrAccountName =
-      getAddressBookEntryOrAccountName(state, address) ?? '';
-    await dispatch(
-      actions.updateRecipient({
-        address,
-        nickname: nickname || nicknameFromAddressBookEntryOrAccountName,
-      }),
-    );
-    await dispatch(computeEstimatedGasLimit());
-  };
-}
-
-/**
  * Clears out the recipient user input, ENS resolution and recipient validation.
  *
  * @returns {ThunkAction<void>}
@@ -2010,52 +2051,20 @@ export function resetRecipientInput() {
 }
 
 /**
- * When a user has enabled hex data field in advanced settings they will be
- * able to supply hex data on a transaction. This method updates the user
- * supplied data. Note, when sending native assets this will result in
- * recomputing estimated gasLimit. When sending a ERC20 asset this is not done
- * because the data sent in the transaction will be determined by the asset,
- * recipient and value, NOT what the user has supplied.
+ * Resets the entire send state tree to the initial state. It also disconnects
+ * polling from the gas controller if the token is present in state.
  *
- * @param {string} hexData - hex encoded string representing transaction data.
  * @returns {ThunkAction<void>}
  */
-export function updateSendHexData(hexData) {
+export function resetSendState() {
   return async (dispatch, getState) => {
-    await dispatch(
-      addHistoryEntry(`sendFlow - user added custom hexData ${hexData}`),
-    );
-    await dispatch(actions.updateUserInputHexData(hexData));
     const state = getState();
-    const draftTransaction =
-      state[name].draftTransactions[state[name].currentTransactionUUID];
-    if (draftTransaction.asset.type === ASSET_TYPES.NATIVE) {
-      await dispatch(computeEstimatedGasLimit());
-    }
-  };
-}
+    dispatch(actions.resetSendState());
 
-/**
- * Toggles the amount.mode between INPUT and MAX modes.
- * As a result, the amount.value will change to either '0x0' when moving from
- * MAX to INPUT, or to the maximum allowable amount based on current asset when
- * moving from INPUT to MAX.
- *
- * @returns {ThunkAction<void>}
- */
-export function toggleSendMaxMode() {
-  return async (dispatch, getState) => {
-    const state = getState();
-    if (state[name].amountMode === AMOUNT_MODES.MAX) {
-      await dispatch(actions.updateAmountMode(AMOUNT_MODES.INPUT));
-      await dispatch(actions.updateSendAmount('0x0'));
-      await dispatch(addHistoryEntry(`sendFlow - user toggled max mode off`));
-    } else {
-      await dispatch(actions.updateAmountMode(AMOUNT_MODES.MAX));
-      await dispatch(actions.updateAmountToMax());
-      await dispatch(addHistoryEntry(`sendFlow - user toggled max mode on`));
+    if (state[name].gasEstimatePollToken) {
+      await disconnectGasFeeEstimatePoller(state[name].gasEstimatePollToken);
+      removePollingTokenFromAppState(state[name].gasEstimatePollToken);
     }
-    await dispatch(computeEstimatedGasLimit());
   };
 }
 
@@ -2145,6 +2154,30 @@ export function signTransaction() {
 }
 
 /**
+ * Toggles the amount.mode between INPUT and MAX modes.
+ * As a result, the amount.value will change to either '0x0' when moving from
+ * MAX to INPUT, or to the maximum allowable amount based on current asset when
+ * moving from INPUT to MAX.
+ *
+ * @returns {ThunkAction<void>}
+ */
+export function toggleSendMaxMode() {
+  return async (dispatch, getState) => {
+    const state = getState();
+    if (state[name].amountMode === AMOUNT_MODES.MAX) {
+      await dispatch(actions.updateAmountMode(AMOUNT_MODES.INPUT));
+      await dispatch(actions.updateSendAmount('0x0'));
+      await dispatch(addHistoryEntry(`sendFlow - user toggled max mode off`));
+    } else {
+      await dispatch(actions.updateAmountMode(AMOUNT_MODES.MAX));
+      await dispatch(actions.updateAmountToMax());
+      await dispatch(addHistoryEntry(`sendFlow - user toggled max mode on`));
+    }
+    await dispatch(computeEstimatedGasLimit());
+  };
+}
+
+/**
  * Begins a new draft transaction, clearing out the previous draft transactions
  * from state, and clearing the currentTransactionUUID. This action is one of
  * the two entry points into the send flow. NOTE: You must route to the send
@@ -2173,125 +2206,6 @@ export function startNewDraftTransaction(asset) {
         details: asset.details,
       }),
     );
-
-    await dispatch(initializeSendState());
-  };
-}
-
-/**
- * Begins a new draft transaction, derived from the txParams of an existing
- * transaction in the TransactionController. This action will first clear out
- * the previous draft transactions and currentTransactionUUID from state. This
- * action is one of the two entry points into the send flow. NOTE: You must
- * route to the send page *after* dispatching this action resolves to ensure
- * that the draftTransaction is properly created.
- *
- * @param {AssetTypesString} assetType - The type of asset the transaction
- *  being edited was sending. The details of the asset will be retrieved from
- *  the transaction data in state.
- * @param {string} transactionId - The id of the transaction being edited.
- * @returns {ThunkAction<void>}
- */
-export function editExistingTransaction(assetType, transactionId) {
-  return async (dispatch, getState) => {
-    await dispatch(actions.clearPreviousDrafts());
-    const state = getState();
-    const unapprovedTransactions = getUnapprovedTxs(state);
-    const transaction = unapprovedTransactions[transactionId];
-    const account = getTargetAccount(state, transaction.txParams.from);
-
-    if (assetType === ASSET_TYPES.NATIVE) {
-      await dispatch(
-        actions.addNewDraft({
-          ...draftTransactionInitialState,
-          id: transactionId,
-          fromAccount: account,
-          gas: {
-            ...draftTransactionInitialState.gas,
-            gasLimit: transaction.txParams.gas,
-            gasPrice: transaction.txParams.gasPrice,
-          },
-          userInputHexData: transaction.txParams.data,
-          recipient: {
-            ...draftTransactionInitialState.recipient,
-            address: transaction.txParams.to,
-            nickname:
-              getAddressBookEntryOrAccountName(state, transaction.txParams.to)
-                ?.name ?? '',
-          },
-          amount: {
-            ...draftTransactionInitialState.amount,
-            value: transaction.txParams.value,
-          },
-          history: [
-            `sendFlow - user clicked edit on transaction with id ${transactionId}`,
-          ],
-        }),
-      );
-      await dispatch(
-        updateSendAsset(
-          { type: ASSET_TYPES.NATIVE },
-          { skipComputeEstimatedGasLimit: true },
-        ),
-      );
-    } else {
-      const tokenData = parseStandardTokenTransactionData(
-        transaction.txParams.data,
-      );
-      const tokenAmountInDec =
-        assetType === ASSET_TYPES.TOKEN ? getTokenValueParam(tokenData) : '1';
-      const address = getTokenAddressParam(tokenData);
-      const nickname =
-        getAddressBookEntryOrAccountName(state, address)?.name ?? '';
-
-      const tokenAmountInHex = addHexPrefix(
-        conversionUtil(tokenAmountInDec, {
-          fromNumericBase: 'dec',
-          toNumericBase: 'hex',
-        }),
-      );
-
-      await dispatch(
-        actions.addNewDraft({
-          ...draftTransactionInitialState,
-          id: transactionId,
-          fromAccount: account,
-          gas: {
-            ...draftTransactionInitialState.gas,
-            gasLimit: transaction.txParams.gas,
-            gasPrice: transaction.txParams.gasPrice,
-          },
-          userInputHexData: transaction.txParams.data,
-          recipient: {
-            ...draftTransactionInitialState.recipient,
-            address,
-            nickname,
-          },
-          amount: {
-            ...draftTransactionInitialState.amount,
-            value: tokenAmountInHex,
-          },
-          history: [
-            `sendFlow - user clicked edit on transaction with id ${transactionId}`,
-          ],
-        }),
-      );
-
-      await dispatch(
-        updateSendAsset(
-          {
-            type: assetType,
-            details: {
-              address: transaction.txParams.to,
-              ...(assetType === ASSET_TYPES.COLLECTIBLE
-                ? { tokenId: getTokenValueParam(tokenData) }
-                : {}),
-            },
-          },
-          { skipComputeEstimatedGasLimit: true },
-        ),
-      );
-    }
 
     await dispatch(initializeSendState());
   };

@@ -28,8 +28,8 @@ import {
 import { BURN_ADDRESS } from '../../../shared/modules/hexstring-utils';
 import { TOKEN_STANDARDS } from '../../helpers/constants/common';
 import {
-  getInitialStateWithExistingTxState,
-  INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+  getInitialSendStateWithExistingTxState,
+  INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
 } from '../../../test/jest/mocks';
 import sendReducer, {
   initialState,
@@ -74,7 +74,7 @@ import sendReducer, {
   getSendStage,
   updateGasPrice,
 } from './send';
-import { editExistingTransaction } from '.';
+import { draftTransactionInitialState, editExistingTransaction } from '.';
 
 const mockStore = createMockStore([thunk]);
 
@@ -132,11 +132,127 @@ describe('Send Slice', () => {
   });
 
   describe('Reducers', () => {
+    describe('addNewDraft', () => {
+      it('should add new draft transaction and set currentTransactionUUID', () => {
+        const action = {
+          type: 'send/addNewDraft',
+          payload: { ...draftTransactionInitialState, id: 4 },
+        };
+        const result = sendReducer(
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
+          action,
+        );
+        expect(result.currentTransactionUUID).not.toStrictEqual('test-uuid');
+        const uuid = result.currentTransactionUUID;
+        const draft = result.draftTransactions[uuid];
+        expect(draft.id).toStrictEqual(4);
+      });
+    });
+    describe('addHistoryEntry', () => {
+      it('should append a history item to the current draft transaction, including timestamp', () => {
+        const action = {
+          type: 'send/addHistoryEntry',
+          payload: 'test entry',
+        };
+        const result = sendReducer(
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
+          action,
+        );
+        expect(result.currentTransactionUUID).toStrictEqual('test-uuid');
+        const draft = getTestUUIDTx(result);
+        const latestHistory = draft.history[draft.history.length - 1];
+        expect(latestHistory.timestamp).toBeDefined();
+        expect(latestHistory.entry).toStrictEqual('test entry');
+      });
+    });
+    describe('calculateGasTotal', () => {
+      it('should set gasTotal to maxFeePerGax * gasLimit for FEE_MARKET transaction', () => {
+        const action = {
+          type: 'send/calculateGasTotal',
+        };
+        const result = sendReducer(
+          getInitialSendStateWithExistingTxState({
+            gas: {
+              gasPrice: '0x1',
+              maxFeePerGas: '0x2',
+              gasLimit: GAS_LIMITS.SIMPLE,
+            },
+            transactionType: TRANSACTION_ENVELOPE_TYPES.FEE_MARKET,
+          }),
+          action,
+        );
+        expect(result.currentTransactionUUID).toStrictEqual('test-uuid');
+        const draft = getTestUUIDTx(result);
+        expect(draft.gas.gasTotal).toStrictEqual(`0xa410`);
+      });
+
+      it('should set gasTotal to gasPrice * gasLimit for non FEE_MARKET transaction', () => {
+        const action = {
+          type: 'send/calculateGasTotal',
+        };
+        const result = sendReducer(
+          getInitialSendStateWithExistingTxState({
+            gas: {
+              gasPrice: '0x1',
+              maxFeePerGas: '0x2',
+              gasLimit: GAS_LIMITS.SIMPLE,
+            },
+          }),
+          action,
+        );
+        expect(result.currentTransactionUUID).toStrictEqual('test-uuid');
+        const draft = getTestUUIDTx(result);
+        expect(draft.gas.gasTotal).toStrictEqual(GAS_LIMITS.SIMPLE);
+      });
+
+      it('should call updateAmountToMax if amount mode is max', () => {
+        const action = {
+          type: 'send/calculateGasTotal',
+        };
+        const result = sendReducer(
+          {
+            ...getInitialSendStateWithExistingTxState({
+              asset: { balance: '0xffff' },
+              gas: {
+                gasPrice: '0x1',
+                gasLimit: GAS_LIMITS.SIMPLE,
+              },
+              recipient: {
+                address: '0x00',
+              },
+            }),
+            selectedAccount: {
+              balance: '0xffff',
+              address: '0x00',
+            },
+            gasEstimateIsLoading: false,
+            amountMode: AMOUNT_MODES.MAX,
+            stage: SEND_STAGES.DRAFT,
+          },
+          action,
+        );
+        expect(result.currentTransactionUUID).toStrictEqual('test-uuid');
+        const draft = getTestUUIDTx(result);
+        expect(draft.amount.value).toStrictEqual('0xadf7');
+        expect(draft.status).toStrictEqual(SEND_STATUSES.VALID);
+      });
+    });
+    describe('resetSendState', () => {
+      it('should set the state back to a blank slate matching the initialState object', () => {
+        const action = {
+          type: 'send/resetSendState',
+        };
+
+        const result = sendReducer({}, action);
+
+        expect(result).toStrictEqual(initialState);
+      });
+    });
     describe('updateSendAmount', () => {
       it('should', async () => {
         const action = { type: 'send/updateSendAmount', payload: '0x1' };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
         expect(getTestUUIDTx(result).amount.value).toStrictEqual('0x1');
@@ -159,7 +275,7 @@ describe('Send Slice', () => {
           },
         };
 
-        const state = getInitialStateWithExistingTxState(maxAmountState);
+        const state = getInitialSendStateWithExistingTxState(maxAmountState);
         const action = { type: 'send/updateAmountToMax' };
         const result = sendReducer(state, action);
 
@@ -180,7 +296,7 @@ describe('Send Slice', () => {
           },
         };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -208,7 +324,7 @@ describe('Send Slice', () => {
           },
         };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -230,7 +346,7 @@ describe('Send Slice', () => {
           payload: 'TestData',
         };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
         const draftTransaction = getTestUUIDTx(result);
@@ -248,7 +364,7 @@ describe('Send Slice', () => {
       it('should', () => {
         const result = sendReducer(
           {
-            ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             stage: SEND_STAGES.DRAFT,
             gasEstimateIsLoading: false,
           },
@@ -261,7 +377,7 @@ describe('Send Slice', () => {
       });
 
       it('should recalculate gasTotal', () => {
-        const gasState = getInitialStateWithExistingTxState({
+        const gasState = getInitialSendStateWithExistingTxState({
           gas: {
             gasLimit: '0x0',
             gasPrice: '0x3b9aca00', // 1000000000
@@ -299,7 +415,7 @@ describe('Send Slice', () => {
           payload: AMOUNT_MODES.MAX,
         };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -312,7 +428,7 @@ describe('Send Slice', () => {
           payload: 'RANDOM',
         };
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -322,7 +438,7 @@ describe('Send Slice', () => {
 
     describe('updateAsset', () => {
       it('should update asset type and balance from respective action payload', () => {
-        const updateAssetState = getInitialStateWithExistingTxState({
+        const updateAssetState = getInitialSendStateWithExistingTxState({
           asset: {
             type: 'old type',
             balance: 'old balance',
@@ -348,7 +464,7 @@ describe('Send Slice', () => {
       });
 
       it('should nullify old contract address error when asset types is not TOKEN', () => {
-        const recipientErrorState = getInitialStateWithExistingTxState({
+        const recipientErrorState = getInitialSendStateWithExistingTxState({
           recipient: {
             error: CONTRACT_ADDRESS_ERROR,
           },
@@ -375,7 +491,7 @@ describe('Send Slice', () => {
       });
 
       it('should nullify old known address error when asset types is not TOKEN', () => {
-        const recipientErrorState = getInitialStateWithExistingTxState({
+        const recipientErrorState = getInitialSendStateWithExistingTxState({
           recipient: {
             warning: KNOWN_RECIPIENT_ADDRESS_WARNING,
           },
@@ -415,7 +531,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -438,7 +554,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -458,7 +574,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -473,7 +589,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -489,7 +605,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -500,7 +616,7 @@ describe('Send Slice', () => {
     describe('validateRecipientUserInput', () => {
       it('should set recipient error and warning to null when user input is', () => {
         const noUserInputState = {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             recipient: {
               error: 'someError',
               warning: 'someWarning',
@@ -524,7 +640,7 @@ describe('Send Slice', () => {
 
       it('should error with an invalid address error when user input is not a valid hex string', () => {
         const tokenAssetTypeState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           recipientInput: '0xValidateError',
         };
         const action = {
@@ -549,7 +665,7 @@ describe('Send Slice', () => {
       // TODO: Expectation might change in the future
       it('should error with an invalid network error when user input is not a valid hex string on a non default network', () => {
         const tokenAssetTypeState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           recipientInput: '0xValidateError',
         };
         const action = {
@@ -573,7 +689,7 @@ describe('Send Slice', () => {
 
       it('should error with invalid address recipient when the user inputs the burn address', () => {
         const tokenAssetTypeState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           recipientInput: '0x0000000000000000000000000000000000000000',
         };
         const action = {
@@ -597,7 +713,7 @@ describe('Send Slice', () => {
 
       it('should error with same address recipient as a token', () => {
         const tokenAssetTypeState = {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             asset: {
               type: ASSET_TYPES.TOKEN,
               details: {
@@ -635,7 +751,7 @@ describe('Send Slice', () => {
         };
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -643,21 +759,9 @@ describe('Send Slice', () => {
       });
     });
 
-    describe('resetSendState', () => {
-      it('should', () => {
-        const action = {
-          type: 'send/resetSendState',
-        };
-
-        const result = sendReducer({}, action);
-
-        expect(result).toStrictEqual(initialState);
-      });
-    });
-
     describe('validateAmountField', () => {
       it('should error with insufficient funds when amount asset value plust gas is higher than asset balance', () => {
-        const nativeAssetState = getInitialStateWithExistingTxState({
+        const nativeAssetState = getInitialSendStateWithExistingTxState({
           amount: {
             value: '0x6fc23ac0', // 1875000000
           },
@@ -684,7 +788,7 @@ describe('Send Slice', () => {
       });
 
       it('should error with insufficient tokens when amount value of tokens is higher than asset balance of token', () => {
-        const tokenAssetState = getInitialStateWithExistingTxState({
+        const tokenAssetState = getInitialSendStateWithExistingTxState({
           amount: {
             value: '0x77359400', // 2000000000
           },
@@ -711,7 +815,7 @@ describe('Send Slice', () => {
       });
 
       it('should error negative value amount', () => {
-        const negativeAmountState = getInitialStateWithExistingTxState({
+        const negativeAmountState = getInitialSendStateWithExistingTxState({
           amount: {
             value: '-1',
           },
@@ -729,7 +833,7 @@ describe('Send Slice', () => {
       });
 
       it('should not error for positive value amount', () => {
-        const otherState = getInitialStateWithExistingTxState({
+        const otherState = getInitialSendStateWithExistingTxState({
           amount: {
             error: 'someError',
             value: '1',
@@ -753,7 +857,7 @@ describe('Send Slice', () => {
 
     describe('validateGasField', () => {
       it('should error when total amount of gas is higher than account balance', () => {
-        const gasFieldState = getInitialStateWithExistingTxState({
+        const gasFieldState = getInitialSendStateWithExistingTxState({
           account: {
             balance: '0x0',
           },
@@ -778,7 +882,7 @@ describe('Send Slice', () => {
 
     describe('validateSendState', () => {
       it('should set `INVALID` send state status when amount error is present', () => {
-        const amountErrorState = getInitialStateWithExistingTxState({
+        const amountErrorState = getInitialSendStateWithExistingTxState({
           amount: {
             error: 'Some Amount Error',
           },
@@ -796,7 +900,7 @@ describe('Send Slice', () => {
       });
 
       it('should set `INVALID` send state status when gas error is present', () => {
-        const gasErrorState = getInitialStateWithExistingTxState({
+        const gasErrorState = getInitialSendStateWithExistingTxState({
           gas: {
             error: 'Some Amount Error',
           },
@@ -814,7 +918,7 @@ describe('Send Slice', () => {
       });
 
       it('should set `INVALID` send state status when asset type is `TOKEN` without token details present', () => {
-        const assetErrorState = getInitialStateWithExistingTxState({
+        const assetErrorState = getInitialSendStateWithExistingTxState({
           asset: {
             type: ASSET_TYPES.TOKEN,
           },
@@ -832,7 +936,7 @@ describe('Send Slice', () => {
       });
 
       it('should set `INVALID` send state status when gasLimit is under the minimumGasLimit', () => {
-        const gasLimitErroState = getInitialStateWithExistingTxState({
+        const gasLimitErroState = getInitialSendStateWithExistingTxState({
           gas: {
             gasLimit: '0x5207',
             minimumGasLimit: GAS_LIMITS.SIMPLE,
@@ -852,7 +956,7 @@ describe('Send Slice', () => {
 
       it('should set `VALID` send state status when conditionals have not been met', () => {
         const validSendStatusState = {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             asset: {
               type: ASSET_TYPES.TOKEN,
               details: {
@@ -883,7 +987,7 @@ describe('Send Slice', () => {
 
   describe('extraReducers/externalReducers', () => {
     describe('QR Code Detected', () => {
-      const qrCodestate = getInitialStateWithExistingTxState({
+      const qrCodestate = getInitialSendStateWithExistingTxState({
         recipient: {
           address: '0xAddress',
         },
@@ -934,7 +1038,7 @@ describe('Send Slice', () => {
     describe('Selected Address Changed', () => {
       it('should update selected account address and balance on non-edit stages', () => {
         const olderState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           selectedAccount: {
             balance: '0x0',
             address: '0xAddress',
@@ -965,7 +1069,7 @@ describe('Send Slice', () => {
     describe('Account Changed', () => {
       it('should', () => {
         const accountsChangedState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           stage: SEND_STAGES.EDIT,
           selectedAccount: {
             address: '0xAddress',
@@ -992,7 +1096,7 @@ describe('Send Slice', () => {
 
       it(`should not edit account balance if action payload address is not the same as state's address`, () => {
         const accountsChangedState = {
-          ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           stage: SEND_STAGES.EDIT,
           selectedAccount: {
             address: '0xAddress',
@@ -1087,7 +1191,7 @@ describe('Send Slice', () => {
               },
             },
           },
-          send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           gas: {
             basicEstimateStatus: 'LOADING',
             basicEstimatesStatus: {
@@ -1115,7 +1219,7 @@ describe('Send Slice', () => {
     describe('Set Basic Gas Estimate Data', () => {
       it('should recalculate gas based off of average basic estimate data', () => {
         const gasState = {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             gas: {
               gasPrice: '0x0',
               gasLimit: GAS_LIMITS.SIMPLE,
@@ -1151,7 +1255,7 @@ describe('Send Slice', () => {
     describe('updateGasPrice', () => {
       it('should update gas price and update draft transaction with validated state', async () => {
         const store = mockStore({
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             gas: {
               gasPrice: undefined,
             },
@@ -1192,7 +1296,7 @@ describe('Send Slice', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             asset: {
               details: {},
             },
@@ -1245,7 +1349,7 @@ describe('Send Slice', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             asset: {
               details: {},
             },
@@ -1297,7 +1401,7 @@ describe('Send Slice', () => {
               chainId: '0x1',
             },
           },
-          send: getInitialStateWithExistingTxState({
+          send: getInitialSendStateWithExistingTxState({
             asset: {
               type: ASSET_TYPES.TOKEN,
               details: {},
@@ -1353,7 +1457,7 @@ describe('Send Slice', () => {
           },
         },
         send: {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             asset: {
               type: '',
               details: {},
@@ -1872,7 +1976,7 @@ describe('Send Slice', () => {
 
     describe('UpdateSendHexData', () => {
       const sendHexDataState = {
-        send: getInitialStateWithExistingTxState({
+        send: getInitialSendStateWithExistingTxState({
           asset: {
             type: '',
           },
@@ -1951,7 +2055,7 @@ describe('Send Slice', () => {
       it('should create actions to toggle off max mode when send amount mode is max', async () => {
         const sendMaxModeState = {
           send: {
-            ...getInitialStateWithExistingTxState({
+            ...getInitialSendStateWithExistingTxState({
               asset: {
                 type: ASSET_TYPES.TOKEN,
                 details: {},
@@ -1999,7 +2103,7 @@ describe('Send Slice', () => {
 
     describe('SignTransaction', () => {
       const signTransactionState = {
-        send: getInitialStateWithExistingTxState({
+        send: getInitialSendStateWithExistingTxState({
           id: 1,
           asset: {},
           recipient: {},
@@ -2112,7 +2216,7 @@ describe('Send Slice', () => {
             // but we need this stub to have the fromAccount because for our
             // action checker the state isn't actually modified after each
             // action is ran.
-            ...getInitialStateWithExistingTxState({
+            ...getInitialSendStateWithExistingTxState({
               id: 1,
               fromAccount: {
                 address: '0xAddress',
@@ -2172,7 +2276,7 @@ describe('Send Slice', () => {
         const action = actionResult[1];
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -2244,7 +2348,7 @@ describe('Send Slice', () => {
             },
           },
           send: {
-            ...getInitialStateWithExistingTxState({
+            ...getInitialSendStateWithExistingTxState({
               id: 1,
               test: 'wow',
               gas: { gasLimit: GAS_LIMITS.SIMPLE },
@@ -2346,7 +2450,7 @@ describe('Send Slice', () => {
         const action = actionResult[1];
 
         const result = sendReducer(
-          INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           action,
         );
 
@@ -2426,7 +2530,7 @@ describe('Send Slice', () => {
           },
         },
         send: {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             id: 1,
             recipient: {
               address: 'Address',
@@ -2530,7 +2634,7 @@ describe('Send Slice', () => {
 
       const action = actionResult[1];
 
-      const result = sendReducer(INITIAL_TEST_STATE_FOR_EXISTING_DRAFT, action);
+      const result = sendReducer(INITIAL_SEND_STATE_FOR_EXISTING_DRAFT, action);
 
       expect(result.currentTransactionUUID).not.toStrictEqual('test-uuid');
 
@@ -2554,29 +2658,29 @@ describe('Send Slice', () => {
     describe('gas selectors', () => {
       it('has a selector that gets gasLimit', () => {
         expect(
-          getGasLimit({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getGasLimit({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe('0x0');
       });
 
       it('has a selector that gets gasPrice', () => {
         expect(
-          getGasPrice({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getGasPrice({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe('0x0');
       });
 
       it('has a selector that gets gasTotal', () => {
         expect(
-          getGasTotal({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getGasTotal({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe('0x0');
       });
 
       it('has a selector to determine if gas fee is in error', () => {
         expect(
-          gasFeeIsInError({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          gasFeeIsInError({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(false);
         expect(
           gasFeeIsInError({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               gas: {
                 error: 'yes',
               },
@@ -2588,7 +2692,7 @@ describe('Send Slice', () => {
       it('has a selector that gets minimumGasLimit', () => {
         expect(
           getMinimumGasLimitForSend({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBe(GAS_LIMITS.SIMPLE);
       });
@@ -2668,7 +2772,7 @@ describe('Send Slice', () => {
                 featureFlags: { advancedInlineGas: true },
               },
               send: {
-                ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+                ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
                 gasIsSetInModal: true,
               },
             }),
@@ -2680,16 +2784,16 @@ describe('Send Slice', () => {
     describe('asset selectors', () => {
       it('has a selector to get the asset', () => {
         expect(
-          getSendAsset({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendAsset({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toMatchObject(
-          getTestUUIDTx(INITIAL_TEST_STATE_FOR_EXISTING_DRAFT).asset,
+          getTestUUIDTx(INITIAL_SEND_STATE_FOR_EXISTING_DRAFT).asset,
         );
       });
 
       it('has a selector to get the asset address', () => {
         expect(
           getSendAssetAddress({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               asset: {
                 balance: '0x0',
                 details: { address: '0x0' },
@@ -2702,11 +2806,11 @@ describe('Send Slice', () => {
 
       it('has a selector that determines if asset is sendable based on ERC721 status', () => {
         expect(
-          getIsAssetSendable({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getIsAssetSendable({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(true);
         expect(
           getIsAssetSendable({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               asset: {
                 type: ASSET_TYPES.TOKEN,
                 details: { isERC721: true },
@@ -2720,19 +2824,19 @@ describe('Send Slice', () => {
     describe('amount selectors', () => {
       it('has a selector to get send amount', () => {
         expect(
-          getSendAmount({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendAmount({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe('0x0');
       });
 
       it('has a selector to get if there is an insufficient funds error', () => {
         expect(
           getIsBalanceInsufficient({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBe(false);
         expect(
           getIsBalanceInsufficient({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               gas: { error: INSUFFICIENT_FUNDS_ERROR },
             }),
           }),
@@ -2741,12 +2845,12 @@ describe('Send Slice', () => {
 
       it('has a selector to get max mode state', () => {
         expect(
-          getSendMaxModeState({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendMaxModeState({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(false);
         expect(
           getSendMaxModeState({
             send: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
               amountMode: AMOUNT_MODES.MAX,
             },
           }),
@@ -2756,12 +2860,12 @@ describe('Send Slice', () => {
       it('has a selector to get the draft transaction ID', () => {
         expect(
           getDraftTransactionID({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBeNull();
         expect(
           getDraftTransactionID({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               id: 'ID',
             }),
           }),
@@ -2770,11 +2874,11 @@ describe('Send Slice', () => {
 
       it('has a selector to get the user entered hex data', () => {
         expect(
-          getSendHexData({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendHexData({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBeNull();
         expect(
           getSendHexData({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               userInputHexData: '0x0',
             }),
           }),
@@ -2783,11 +2887,11 @@ describe('Send Slice', () => {
 
       it('has a selector to get if there is an amount error', () => {
         expect(
-          sendAmountIsInError({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          sendAmountIsInError({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(false);
         expect(
           sendAmountIsInError({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               amount: { error: 'any' },
             }),
           }),
@@ -2797,12 +2901,12 @@ describe('Send Slice', () => {
 
     describe('recipient selectors', () => {
       it('has a selector to get recipient address', () => {
-        expect(getSendTo({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT })).toBe(
+        expect(getSendTo({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT })).toBe(
           '',
         );
         expect(
           getSendTo({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               recipient: { address: '0xb' },
             }),
           }),
@@ -2812,13 +2916,13 @@ describe('Send Slice', () => {
       it('has a selector to check if using the my accounts option for recipient selection', () => {
         expect(
           getIsUsingMyAccountForRecipientSearch({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBe(false);
         expect(
           getIsUsingMyAccountForRecipientSearch({
             send: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
               recipientMode: RECIPIENT_SEARCH_MODES.MY_ACCOUNTS,
             },
           }),
@@ -2828,13 +2932,13 @@ describe('Send Slice', () => {
       it('has a selector to get recipient user input in input field', () => {
         expect(
           getRecipientUserInput({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBe('');
         expect(
           getRecipientUserInput({
             send: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
               recipientInput: 'domain.eth',
             },
           }),
@@ -2844,11 +2948,11 @@ describe('Send Slice', () => {
       it('has a selector to get recipient state', () => {
         expect(
           getRecipient({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             metamask: { ensResolutionsByAddress: {} },
           }),
         ).toMatchObject(
-          getTestUUIDTx(INITIAL_TEST_STATE_FOR_EXISTING_DRAFT).recipient,
+          getTestUUIDTx(INITIAL_SEND_STATE_FOR_EXISTING_DRAFT).recipient,
         );
       });
     });
@@ -2856,14 +2960,14 @@ describe('Send Slice', () => {
     describe('send validity selectors', () => {
       it('has a selector to get send errors', () => {
         expect(
-          getSendErrors({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendErrors({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toMatchObject({
           gasFee: null,
           amount: null,
         });
         expect(
           getSendErrors({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               gas: {
                 error: 'gasFeeTest',
               },
@@ -2878,13 +2982,13 @@ describe('Send Slice', () => {
       it('has a selector to get send state initialization status', () => {
         expect(
           isSendStateInitialized({
-            send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           }),
         ).toBe(false);
         expect(
           isSendStateInitialized({
             send: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
               stage: SEND_STATUSES.ADD_RECIPIENT,
             },
           }),
@@ -2893,11 +2997,11 @@ describe('Send Slice', () => {
 
       it('has a selector to get send state validity', () => {
         expect(
-          isSendFormInvalid({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          isSendFormInvalid({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(false);
         expect(
           isSendFormInvalid({
-            send: getInitialStateWithExistingTxState({
+            send: getInitialSendStateWithExistingTxState({
               status: SEND_STATUSES.INVALID,
             }),
           }),
@@ -2906,12 +3010,12 @@ describe('Send Slice', () => {
 
       it('has a selector to get send stage', () => {
         expect(
-          getSendStage({ send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT }),
+          getSendStage({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT }),
         ).toBe(SEND_STAGES.INACTIVE);
         expect(
           getSendStage({
             send: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
               stage: SEND_STAGES.ADD_RECIPIENT,
             },
           }),

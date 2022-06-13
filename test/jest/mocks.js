@@ -109,7 +109,7 @@ export const createGasFeeEstimatesForFeeMarket = () => {
   };
 };
 
-export const INITIAL_TEST_STATE_FOR_EXISTING_DRAFT = {
+export const INITIAL_SEND_STATE_FOR_EXISTING_DRAFT = {
   ...initialState,
   currentTransactionUUID: 'test-uuid',
   draftTransactions: {
@@ -119,8 +119,8 @@ export const INITIAL_TEST_STATE_FOR_EXISTING_DRAFT = {
   },
 };
 
-export const getInitialStateWithExistingTxState = (draftTxState) => ({
-  ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+export const getInitialSendStateWithExistingTxState = (draftTxState) => ({
+  ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
   draftTransactions: {
     'test-uuid': {
       ...draftTransactionInitialState,

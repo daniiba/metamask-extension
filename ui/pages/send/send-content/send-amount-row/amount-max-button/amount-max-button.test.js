@@ -3,12 +3,12 @@ import configureMockStore from 'redux-mock-store';
 import thunk from 'redux-thunk';
 
 import { fireEvent } from '@testing-library/react';
-import { initialState, SEND_STATUSES } from '../../../../../ducks/send';
+import { SEND_STATUSES } from '../../../../../ducks/send';
 import { renderWithProvider } from '../../../../../../test/jest';
 import { GAS_ESTIMATE_TYPES } from '../../../../../../shared/constants/gas';
 import {
-  getInitialStateWithExistingTxState,
-  INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+  getInitialSendStateWithExistingTxState,
+  INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
 } from '../../../../../../test/jest/mocks';
 import AmountMaxButton from './amount-max-button';
 
@@ -26,7 +26,7 @@ describe('AmountMaxButton Component', () => {
               EIPS: {},
             },
           },
-          send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
         }),
       );
       expect(getByText('Max')).toBeTruthy();
@@ -40,7 +40,7 @@ describe('AmountMaxButton Component', () => {
             EIPS: {},
           },
         },
-        send: getInitialStateWithExistingTxState({
+        send: getInitialSendStateWithExistingTxState({
           status: SEND_STATUSES.VALID,
         }),
       });
@@ -64,7 +64,7 @@ describe('AmountMaxButton Component', () => {
           },
         },
         send: {
-          ...getInitialStateWithExistingTxState({
+          ...getInitialSendStateWithExistingTxState({
             status: SEND_STATUSES.VALID,
           }),
           amountMode: 'MAX',

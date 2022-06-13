@@ -7,8 +7,8 @@ import { SEND_STAGES } from '../../../ducks/send';
 import { renderWithProvider } from '../../../../test/jest';
 import { ASSET_TYPES } from '../../../../shared/constants/transaction';
 import {
-  getInitialStateWithExistingTxState,
-  INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+  getInitialSendStateWithExistingTxState,
+  INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
 } from '../../../../test/jest/mocks';
 import SendHeader from './send-header.component';
 
@@ -30,7 +30,7 @@ describe('SendHeader Component', () => {
       const { getByText, rerender } = renderWithProvider(
         <SendHeader />,
         configureMockStore(middleware)({
-          send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           gas: { basicEstimateStatus: 'LOADING' },
           history: { mostRecentOverviewPage: 'activity' },
         }),
@@ -40,7 +40,7 @@ describe('SendHeader Component', () => {
         <SendHeader />,
         configureMockStore(middleware)({
           send: {
-            ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             stage: SEND_STAGES.ADD_RECIPIENT,
           },
           gas: { basicEstimateStatus: 'LOADING' },
@@ -55,10 +55,10 @@ describe('SendHeader Component', () => {
         <SendHeader />,
         configureMockStore(middleware)({
           send: {
-            ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             stage: SEND_STAGES.DRAFT,
             asset: {
-              ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT.asset,
+              ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT.asset,
               type: ASSET_TYPES.NATIVE,
             },
           },
@@ -74,7 +74,7 @@ describe('SendHeader Component', () => {
         <SendHeader />,
         configureMockStore(middleware)({
           send: {
-            ...getInitialStateWithExistingTxState({
+            ...getInitialSendStateWithExistingTxState({
               asset: {
                 type: ASSET_TYPES.TOKEN,
               },
@@ -93,7 +93,7 @@ describe('SendHeader Component', () => {
         <SendHeader />,
         configureMockStore(middleware)({
           send: {
-            ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             stage: SEND_STAGES.EDIT,
           },
           gas: { basicEstimateStatus: 'LOADING' },
@@ -109,7 +109,7 @@ describe('SendHeader Component', () => {
       const { getByText } = renderWithProvider(
         <SendHeader />,
         configureMockStore(middleware)({
-          send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+          send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
           gas: { basicEstimateStatus: 'LOADING' },
           history: { mostRecentOverviewPage: 'activity' },
         }),
@@ -122,7 +122,7 @@ describe('SendHeader Component', () => {
         <SendHeader />,
         configureMockStore(middleware)({
           send: {
-            ...INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+            ...INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
             stage: SEND_STAGES.EDIT,
           },
           gas: { basicEstimateStatus: 'LOADING' },
@@ -134,7 +134,7 @@ describe('SendHeader Component', () => {
 
     it('resets send state when clicked', () => {
       const store = configureMockStore(middleware)({
-        send: INITIAL_TEST_STATE_FOR_EXISTING_DRAFT,
+        send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
         gas: { basicEstimateStatus: 'LOADING' },
         history: { mostRecentOverviewPage: 'activity' },
       });
