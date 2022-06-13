@@ -2901,14 +2901,18 @@ describe('Send Slice', () => {
 
     describe('recipient selectors', () => {
       it('has a selector to get recipient address', () => {
-        expect(getSendTo({ send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT })).toBe(
-          '',
-        );
+        expect(
+          getSendTo({
+            send: INITIAL_SEND_STATE_FOR_EXISTING_DRAFT,
+            metamask: { ensResolutionsByAddress: {} },
+          }),
+        ).toBe('');
         expect(
           getSendTo({
             send: getInitialSendStateWithExistingTxState({
               recipient: { address: '0xb' },
             }),
+            metamask: { ensResolutionsByAddress: {} },
           }),
         ).toBe('0xb');
       });
